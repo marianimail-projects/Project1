@@ -29,6 +29,12 @@ class RetrievedKB:
 class KBStore:
     def __init__(self) -> None:
         self._property_registry: dict[str, dict[str, str]] = {}
+        self._registry_rows: list[dict[str, str]] = []
+        self._registry_by_id: dict[str, dict[str, str]] = {}
+        self._registry_by_name: dict[str, dict[str, str]] = {}
+        self._registry_sheet_name: str | None = None
+        self._kb_sheet_name: str | None = None
+        self._registry_key_field: str | None = None
 
     @property
     def property_registry(self) -> dict[str, dict[str, str]]:
@@ -44,15 +50,23 @@ class KBStore:
         if not sheet_names:
             return
 
-        kb_sheet = wb[sheet_names[0]]
+        registry_sheet_name = _pick_sheet_name(sheet_names, "Strutture", default=sheet_names[0])
+        kb_sheet_name = _pick_sheet_name(
+            sheet_names,
+            "Knowledge base",
+            default=sheet_names[1] if len(sheet_names) > 1 else sheet_names[0],
+        )
+        self._registry_sheet_name = registry_sheet_name
+        self._kb_sheet_name = kb_sheet_name
+
+        kb_sheet = wb[kb_sheet_name]
         headers = self._read_headers(kb_sheet)
         idx, _debug = self._build_header_index(headers)
         rows = list(self._iter_kb_rows(kb_sheet, idx=idx))
 
-        # Second sheet: anagrafica (opzionale)
-        if len(sheet_names) >= 2:
-            registry_sheet = wb[sheet_names[1]]
-            self._property_registry = self._read_registry(registry_sheet)
+        registry_sheet = wb[registry_sheet_name]
+        self._registry_rows = self._read_registry_rows(registry_sheet)
+        self._build_registry_indexes()
 
         if rows:
             self._sync_rows(rows)
@@ -67,20 +81,37 @@ class KBStore:
         if not sheet_names:
             return {"ok": False, "error": "No sheets found"}
 
-        kb_sheet = wb[sheet_names[0]]
+        registry_sheet_name = _pick_sheet_name(sheet_names, "Strutture", default=sheet_names[0])
+        kb_sheet_name = _pick_sheet_name(
+            sheet_names,
+            "Knowledge base",
+            default=sheet_names[1] if len(sheet_names) > 1 else sheet_names[0],
+        )
+
+        kb_sheet = wb[kb_sheet_name]
         headers = self._read_headers(kb_sheet)
         idx, debug = self._build_header_index(headers)
         rows = list(self._iter_kb_rows(kb_sheet, idx=idx))
         sample = rows[:3]
 
+        registry_sheet = wb[registry_sheet_name]
+        registry_rows = self._read_registry_rows(registry_sheet)
+        registry_sample = registry_rows[:3]
+        registry_key_field = self._detect_registry_name_field(registry_rows)
+
         return {
             "ok": True,
             "sheet_names": sheet_names,
+            "kb_sheet_name": kb_sheet_name,
+            "registry_sheet_name": registry_sheet_name,
+            "registry_key_field": registry_key_field,
             "headers": headers,
             "header_map": debug,
             "row_count_valid": len(rows),
             "row_count_total": kb_sheet.max_row - 1 if kb_sheet.max_row else 0,
             "sample_rows": sample,
+            "registry_row_count": len(registry_rows),
+            "registry_sample_rows": registry_sample,
         }
 
     def retrieve(
@@ -183,18 +214,15 @@ class KBStore:
             yield out
 
     @staticmethod
-    def _read_registry(sheet) -> dict[str, dict[str, str]]:
-        # Minimal generic loader: first row headers, each next row is a record keyed by first column.
+    def _read_registry_rows(sheet) -> list[dict[str, str]]:
+        # Minimal generic loader: first row headers, each next row is a record.
         headers = []
         for cell in sheet[1]:
             headers.append(str(cell.value).strip() if cell.value is not None else "")
 
-        registry: dict[str, dict[str, str]] = {}
+        registry_rows: list[dict[str, str]] = []
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(v is not None and str(v).strip() for v in row):
-                continue
-            key = str(row[0]).strip() if row and row[0] is not None else ""
-            if not key:
                 continue
             record: dict[str, str] = {}
             for i, h in enumerate(headers):
@@ -206,8 +234,9 @@ class KBStore:
                 sval = str(val).strip()
                 if sval:
                     record[h] = sval
-            registry[key] = record
-        return registry
+            if record:
+                registry_rows.append(record)
+        return registry_rows
 
     @staticmethod
     def _matches_property(unit_cell: str | None, property_hint: str | None) -> bool:
@@ -221,6 +250,29 @@ class KBStore:
             return False
         hint = property_hint.strip().lower()
         return unit_norm == hint
+
+    def resolve_property_name(self, property_id: str | None) -> tuple[str | None, dict[str, str] | None]:
+        """
+        Returns (property_name, registry_record) using:
+        - property_id column if present
+        - fallback to Nome (name) matching or direct property_id as name
+        """
+        if not property_id:
+            return None, None
+        pid = property_id.strip()
+        if not pid:
+            return None, None
+
+        if pid in self._registry_by_id:
+            record = self._registry_by_id[pid]
+            name = record.get(self._registry_key_field or "Nome") or pid
+            return name, record
+
+        if pid in self._registry_by_name:
+            record = self._registry_by_name[pid]
+            return pid, record
+
+        return pid, self._registry_by_name.get(pid)
 
     @staticmethod
     def _normalize_header(value: str) -> str:
@@ -281,6 +333,55 @@ class KBStore:
             debug = {k: headers[i] if i < len(headers) else "" for k, i in idx.items()}
 
         return idx, debug
+
+    @staticmethod
+    def _detect_registry_name_field(rows: list[dict[str, str]]) -> str | None:
+        if not rows:
+            return None
+        # Prefer exact "Nome", else case-insensitive match
+        for key in rows[0].keys():
+            if key == "Nome":
+                return "Nome"
+        for key in rows[0].keys():
+            if key.strip().lower() == "nome":
+                return key
+        return None
+
+    def _build_registry_indexes(self) -> None:
+        self._registry_by_id = {}
+        self._registry_by_name = {}
+        self._property_registry = {}
+
+        if not self._registry_rows:
+            return
+
+        name_field = self._detect_registry_name_field(self._registry_rows) or "Nome"
+        self._registry_key_field = name_field
+
+        # detect property_id-like field
+        property_id_field = None
+        for key in self._registry_rows[0].keys():
+            norm = self._normalize_header(key)
+            if norm in {"propertyid", "idstruttura", "codicestruttura", "idproperty"}:
+                property_id_field = key
+                break
+
+        for row in self._registry_rows:
+            name_val = row.get(name_field) or row.get("Nome")
+            if name_val:
+                self._registry_by_name[name_val] = row
+                self._property_registry[name_val] = row
+            if property_id_field:
+                pid = row.get(property_id_field)
+                if pid:
+                    self._registry_by_id[pid] = row
+
+
+def _pick_sheet_name(sheet_names: list[str], preferred: str, *, default: str) -> str:
+    for name in sheet_names:
+        if name.strip().lower() == preferred.strip().lower():
+            return name
+    return default
 
 
 def _row_to_embedding_text(row: dict[str, str | None]) -> str:

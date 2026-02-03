@@ -92,7 +92,10 @@ class ChatService:
                     session.guest_last_name = booking_ctx.guest_last_name
                     db.commit()
 
-            retrieved = self._kb.retrieve(text, property_hint=booking_ctx.property_id)
+            property_name, registry_record = self._kb.resolve_property_name(booking_ctx.property_id)
+            property_hint = property_name or booking_ctx.property_id
+
+            retrieved = self._kb.retrieve(text, property_hint=property_hint)
             best_score = retrieved[0].score if retrieved else 0.0
             if not retrieved or best_score < settings.kb_min_score:
                 self._create_handoff(
@@ -131,13 +134,13 @@ class ChatService:
             if history_messages and history_messages[-1].role == "user" and history_messages[-1].content == text:
                 history_messages = history_messages[:-1]
 
-            registry = self._kb.property_registry.get(booking_ctx.property_id, {})
+            registry = registry_record or {}
             guest_name_line = (
                 f"Cognome ospite: {booking_ctx.guest_last_name}" if booking_ctx.guest_last_name else ""
             )
             registry_line = (
-                f"Anagrafica struttura (property_id={booking_ctx.property_id}): "
-                f"{json.dumps(registry, ensure_ascii=False)}"
+                f"Anagrafica struttura (property_id={booking_ctx.property_id}, nome={property_name or '-'})"
+                f": {json.dumps(registry, ensure_ascii=False)}"
             )
 
             rag_context = "\n".join(
