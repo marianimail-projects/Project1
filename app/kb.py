@@ -320,9 +320,9 @@ class KBStore:
                     idx[key] = i
                     debug[key] = h
 
-        # If still missing, fall back by position (expected order)
-        required = ["Categoria", "Appartamento /stanza", "ambito", "descrizione", "risposta"]
-        if not all(k in idx for k in required) and len(headers) >= 5:
+        # If "risposta" is missing, fall back by position (expected order)
+        # to avoid silently mis-mapping columns.
+        if "risposta" not in idx and len(headers) >= 5:
             idx = {
                 "Categoria": 0,
                 "Appartamento /stanza": 1,
