@@ -60,7 +60,10 @@ class CiaoBookingClient:
     def _mock_get_booking_by_phone(phone_e164: str) -> BookingContext | None:
         path = Path("data/mock_ciaobooking.json")
         if not path.exists():
-            return None
+            # Fallback to example file so the app is testable immediately on Render.
+            path = Path("data/mock_ciaobooking.example.json")
+            if not path.exists():
+                return None
         blob = json.loads(path.read_text(encoding="utf-8"))
         items = blob.get("bookings", []) if isinstance(blob, dict) else []
         for b in items:
@@ -72,4 +75,3 @@ class CiaoBookingClient:
                     guest_language=(b.get("guest_language") or None),
                 )
         return None
-

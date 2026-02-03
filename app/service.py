@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import httpx
 from sqlalchemy import select
 
 from app.ciaobooking import CiaoBookingClient
@@ -12,6 +11,7 @@ from app.db import SessionLocal
 from app.kb import KBStore
 from app.llm import chat_completion
 from app.models import ChatMessage, ChatSession, HandoffRequest
+import httpx
 
 
 AGENT_SYSTEM_PROMPT = """Sei un assistente virtuale altamente qualificato che lavora per una struttura alberghiera di lusso. Il tuo ruolo è fornire supporto agli ospiti prima, durante e dopo il soggiorno, con lo stesso tono, precisione e livello di servizio di un concierge 5 stelle.
@@ -62,7 +62,8 @@ class ChatService:
         self._kb = kb_store
         self._ciao = CiaoBookingClient()
 
-    async def handle_incoming_message(self, *, phone_e164: str, text: str) -> dict[str, Any]:
+    def handle_incoming_message(self, *, phone_e164: str, text: str) -> dict[str, Any]:
+        # 1) Persist user message (session == phone)
         with SessionLocal() as db:
             session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
             if not session:
@@ -71,140 +72,138 @@ class ChatService:
                 db.commit()
                 db.refresh(session)
 
-            # Always store user message
             db.add(ChatMessage(session_id=session.id, role="user", content=text))
             db.commit()
 
-        # Ensure booking context exists
-        booking_ctx = self._ciao.get_booking_by_phone(phone_e164)
-        if not booking_ctx:
-            await self._create_handoff(phone_e164, None, None, None, text, reason="no_booking")
-            assistant = _handoff_message(None)
-            self._store_assistant(phone_e164, assistant)
-            return {
-                "status": "handoff",
-                "assistant_message": assistant,
-                "booking_found": False,
-            }
+        # 2) Business logic (safe fallback on any error)
+        try:
+            booking_ctx = self._ciao.get_booking_by_phone(phone_e164)
+            if not booking_ctx:
+                self._create_handoff(phone_e164, None, None, None, text, reason="no_booking")
+                assistant = _handoff_message(None)
+                self._store_assistant(phone_e164, assistant)
+                return {"status": "handoff", "assistant_message": assistant, "booking_found": False}
 
-        # Persist booking context into session
-        with SessionLocal() as db:
-            session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
-            if session:
-                session.booking_id = booking_ctx.booking_id
-                session.property_id = booking_ctx.property_id
-                session.guest_last_name = booking_ctx.guest_last_name
-                db.commit()
+            with SessionLocal() as db:
+                session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
+                if session:
+                    session.booking_id = booking_ctx.booking_id
+                    session.property_id = booking_ctx.property_id
+                    session.guest_last_name = booking_ctx.guest_last_name
+                    db.commit()
 
-        # Retrieve from KB filtered by property_id
-        retrieved = self._kb.retrieve(text, property_hint=booking_ctx.property_id)
-        best_score = retrieved[0].score if retrieved else 0.0
-        if not retrieved or best_score < settings.kb_min_score:
-            await self._create_handoff(
-                phone_e164,
-                booking_ctx.guest_last_name,
-                booking_ctx.property_id,
-                booking_ctx.booking_id,
-                text,
-                reason="no_kb_answer",
+            retrieved = self._kb.retrieve(text, property_hint=booking_ctx.property_id)
+            best_score = retrieved[0].score if retrieved else 0.0
+            if not retrieved or best_score < settings.kb_min_score:
+                self._create_handoff(
+                    phone_e164,
+                    booking_ctx.guest_last_name,
+                    booking_ctx.property_id,
+                    booking_ctx.booking_id,
+                    text,
+                    reason="no_kb_answer",
+                )
+                assistant = _handoff_message(booking_ctx.guest_last_name)
+                self._store_assistant(phone_e164, assistant)
+                return {
+                    "status": "handoff",
+                    "assistant_message": assistant,
+                    "booking_found": True,
+                    "kb_used": False,
+                    "kb_best_score": best_score,
+                }
+
+            with SessionLocal() as db:
+                session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
+                memory_summary = session.memory_summary if session else None
+                history_messages: list[ChatMessage] = []
+                if session:
+                    msgs = (
+                        db.query(ChatMessage)
+                        .filter(ChatMessage.session_id == session.id)
+                        .order_by(ChatMessage.id.desc())
+                        .limit(16)
+                        .all()
+                    )
+                    history_messages = list(reversed(msgs))
+
+            # remove current user message from history (we add it explicitly at the end)
+            if history_messages and history_messages[-1].role == "user" and history_messages[-1].content == text:
+                history_messages = history_messages[:-1]
+
+            registry = self._kb.property_registry.get(booking_ctx.property_id, {})
+            guest_name_line = (
+                f"Cognome ospite: {booking_ctx.guest_last_name}" if booking_ctx.guest_last_name else ""
             )
-            assistant = _handoff_message(booking_ctx.guest_last_name)
+            registry_line = (
+                f"Anagrafica struttura (property_id={booking_ctx.property_id}): "
+                f"{json.dumps(registry, ensure_ascii=False)}"
+            )
+
+            rag_context = "\n".join(
+                [
+                    (
+                        f"[KB {i} | score={r.score:.3f} | unit={r.unit or 'N/A'} | ambito={r.scope or 'N/A'}]\n"
+                        f"Descrizione: {r.description or ''}\n"
+                        f"Risposta: {r.answer}\n"
+                    )
+                    for i, r in enumerate(retrieved, start=1)
+                ]
+            )
+
+            guardrails = (
+                "REGOLE VINCOLANTI:\n"
+                "- Rispondi usando SOLO le informazioni presenti in 'CONTESTO KB' e nell'anagrafica struttura.\n"
+                "- Se il contesto non contiene la risposta specifica, NON inventare: rispondi esattamente con '[[HANDOFF_NICCOLO]]'.\n"
+                "- Non menzionare la knowledge base, retrieval, punteggi o sistemi interni.\n"
+                "- Mantieni il tono 5 stelle.\n"
+                "- Usa la lingua del cliente (default italiano).\n"
+            )
+
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                {"role": "system", "content": guardrails},
+                {
+                    "role": "system",
+                    "content": f"{guest_name_line}\nBooking ID: {booking_ctx.booking_id}\n{registry_line}".strip(),
+                },
+            ]
+            if memory_summary:
+                messages.append({"role": "system", "content": f"Memoria conversazione: {memory_summary}"})
+
+            for m in history_messages:
+                if m.role in {"user", "assistant"}:
+                    messages.append({"role": m.role, "content": m.content})
+
+            messages.append({"role": "system", "content": f"CONTESTO KB:\n{rag_context}".strip()})
+            messages.append({"role": "user", "content": text})
+
+            assistant = chat_completion(messages).strip()
+            if assistant == "[[HANDOFF_NICCOLO]]" or "HANDOFF_NICCOLO" in assistant.upper():
+                self._create_handoff(
+                    phone_e164,
+                    booking_ctx.guest_last_name,
+                    booking_ctx.property_id,
+                    booking_ctx.booking_id,
+                    text,
+                    reason="model_handoff",
+                )
+                assistant = _handoff_message(booking_ctx.guest_last_name)
+
             self._store_assistant(phone_e164, assistant)
+            self._maybe_update_memory(phone_e164)
             return {
-                "status": "handoff",
+                "status": "ok",
                 "assistant_message": assistant,
                 "booking_found": True,
-                "kb_used": False,
+                "kb_used": True,
                 "kb_best_score": best_score,
             }
-
-        # Compose LLM prompt with RAG context
-        with SessionLocal() as db:
-            session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
-            memory_summary = session.memory_summary if session else None
-            history_messages: list[ChatMessage] = []
-            if session:
-                msgs = (
-                    db.query(ChatMessage)
-                    .filter(ChatMessage.session_id == session.id)
-                    .order_by(ChatMessage.id.desc())
-                    .limit(16)
-                    .all()
-                )
-                history_messages = list(reversed(msgs))
-
-        # Remove the current user message from history (we add it explicitly at the end)
-        if history_messages and history_messages[-1].role == "user" and history_messages[-1].content == text:
-            history_messages = history_messages[:-1]
-
-        registry = self._kb.property_registry.get(booking_ctx.property_id, {})
-        guest_name_line = (
-            f"Cognome ospite: {booking_ctx.guest_last_name}" if booking_ctx.guest_last_name else ""
-        )
-        registry_line = f"Anagrafica struttura (property_id={booking_ctx.property_id}): {json.dumps(registry, ensure_ascii=False)}"
-
-        rag_context_lines = []
-        for i, r in enumerate(retrieved, start=1):
-            rag_context_lines.append(
-                f"[KB {i} | score={r.score:.3f} | unit={r.unit or 'N/A'} | ambito={r.scope or 'N/A'}]\n"
-                f"Descrizione: {r.description or ''}\n"
-                f"Risposta: {r.answer}\n"
-            )
-        rag_context = "\n".join(rag_context_lines)
-
-        guardrails = (
-            "REGOLE VINCOLANTI:\n"
-            "- Rispondi usando SOLO le informazioni presenti in 'CONTESTO KB' e nell'anagrafica struttura.\n"
-            "- Se il contesto non contiene la risposta specifica, NON inventare: rispondi esattamente con '[[HANDOFF_NICCOLO]]'.\n"
-            "- Non menzionare la knowledge base, retrieval, punteggi o sistemi interni.\n"
-            "- Mantieni il tono 5 stelle.\n"
-            "- Usa la lingua del cliente (default italiano).\n"
-        )
-
-        messages: list[dict[str, Any]] = [
-            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-            {"role": "system", "content": guardrails},
-            {
-                "role": "system",
-                "content": f"{guest_name_line}\nBooking ID: {booking_ctx.booking_id}\n{registry_line}".strip(),
-            },
-        ]
-        if memory_summary:
-            messages.append({"role": "system", "content": f"Memoria conversazione: {memory_summary}"})
-
-        for m in history_messages:
-            if m.role in {"user", "assistant"}:
-                messages.append({"role": m.role, "content": m.content})
-
-        messages.append(
-            {
-                "role": "system",
-                "content": f"CONTESTO KB:\n{rag_context}".strip(),
-            }
-        )
-        messages.append({"role": "user", "content": text})
-
-        assistant = chat_completion(messages).strip()
-        if assistant == "[[HANDOFF_NICCOLO]]" or assistant.strip().upper().find("HANDOFF_NICCOLO") != -1:
-            await self._create_handoff(
-                phone_e164,
-                booking_ctx.guest_last_name,
-                booking_ctx.property_id,
-                booking_ctx.booking_id,
-                text,
-                reason="model_handoff",
-            )
-            assistant = _handoff_message(booking_ctx.guest_last_name)
-
-        self._store_assistant(phone_e164, assistant)
-        await self._maybe_update_memory(phone_e164)
-        return {
-            "status": "ok",
-            "assistant_message": assistant,
-            "booking_found": True,
-            "kb_used": True,
-            "kb_best_score": best_score,
-        }
+        except Exception:
+            self._create_handoff(phone_e164, None, None, None, text, reason="internal_error")
+            assistant = _handoff_message(None)
+            self._store_assistant(phone_e164, assistant)
+            return {"status": "handoff", "assistant_message": assistant, "booking_found": False}
 
     def _store_assistant(self, phone_e164: str, assistant_text: str) -> None:
         with SessionLocal() as db:
@@ -214,7 +213,7 @@ class ChatService:
             db.add(ChatMessage(session_id=session.id, role="assistant", content=assistant_text))
             db.commit()
 
-    async def _maybe_update_memory(self, phone_e164: str) -> None:
+    def _maybe_update_memory(self, phone_e164: str) -> None:
         # Lightweight: create/update a short summary every few turns (here: always after assistant reply).
         with SessionLocal() as db:
             session = db.scalar(select(ChatSession).where(ChatSession.phone_e164 == phone_e164))
@@ -251,7 +250,7 @@ class ChatService:
             session.memory_summary = updated
             db.commit()
 
-    async def _create_handoff(
+    def _create_handoff(
         self,
         phone_e164: str,
         last_name: str | None,
@@ -284,8 +283,8 @@ class ChatService:
                 "message": user_message,
             }
             try:
-                async with httpx.AsyncClient(timeout=8.0) as client:
-                    await client.post(settings.niccolo_notify_webhook_url, json=payload)
+                with httpx.Client(timeout=8.0) as client:
+                    client.post(settings.niccolo_notify_webhook_url, json=payload)
             except Exception:
                 # Silent fail: non blocchiamo la risposta al cliente
                 pass

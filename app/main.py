@@ -4,12 +4,16 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import Base, engine
 from app.kb import KBStore
+from app.db import SessionLocal
+from app.models import ChatSession, HandoffRequest, KBEntry
 from app.service import ChatService
 
 
@@ -41,14 +45,20 @@ def index() -> HTMLResponse:
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page() -> HTMLResponse:
+    html_path = static_dir / "admin.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+
 @app.post("/api/chat")
-async def api_chat(payload: dict) -> JSONResponse:
+def api_chat(payload: dict) -> JSONResponse:
     phone = str(payload.get("phone", "")).strip()
     message = str(payload.get("message", "")).strip()
     if not phone or not message:
         raise HTTPException(status_code=400, detail="Missing 'phone' or 'message'.")
 
-    result = await chat_service.handle_incoming_message(phone_e164=phone, text=message)
+    result = chat_service.handle_incoming_message(phone_e164=phone, text=message)
     return JSONResponse(content=result)
 
 
@@ -69,6 +79,60 @@ async def admin_kb_upload(
     return JSONResponse(content={"ok": True, "kb_path": str(target)})
 
 
+@app.get("/admin/status")
+def admin_status(
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> JSONResponse:
+    if not settings.admin_api_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    with SessionLocal() as db:
+        kb_count = db.scalar(select(func.count()).select_from(KBEntry)) or 0
+        sessions_count = db.scalar(select(func.count()).select_from(ChatSession)) or 0
+        handoffs_count = db.scalar(select(func.count()).select_from(HandoffRequest)) or 0
+    return JSONResponse(
+        content={
+            "ok": True,
+            "kb_entries": int(kb_count),
+            "sessions": int(sessions_count),
+            "handoffs": int(handoffs_count),
+            "registry_properties": len(kb_store.property_registry),
+        }
+    )
+
+
+@app.get("/admin/handoffs")
+def admin_handoffs(
+    limit: int = 50,
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> JSONResponse:
+    if not settings.admin_api_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    limit = max(1, min(limit, 200))
+    with SessionLocal() as db:
+        rows = (
+            db.query(HandoffRequest)
+            .order_by(HandoffRequest.id.desc())
+            .limit(limit)
+            .all()
+        )
+        items = [
+            {
+                "id": r.id,
+                "created_at": r.created_at.isoformat() + "Z",
+                "phone_e164": r.phone_e164,
+                "guest_last_name": r.guest_last_name,
+                "property_id": r.property_id,
+                "booking_id": r.booking_id,
+                "reason": r.reason,
+                "user_message": r.user_message,
+            }
+            for r in rows
+        ]
+    return JSONResponse(content={"ok": True, "items": items})
+
+
 @app.post("/twilio/whatsapp")
 async def twilio_whatsapp_webhook(request: Request) -> HTMLResponse:
     """
@@ -85,7 +149,7 @@ async def twilio_whatsapp_webhook(request: Request) -> HTMLResponse:
     if phone.startswith("whatsapp:"):
         phone = phone.split(":", 1)[1]
 
-    result = await chat_service.handle_incoming_message(phone_e164=phone, text=body)
+    result = await run_in_threadpool(chat_service.handle_incoming_message, phone_e164=phone, text=body)
     reply = result.get("assistant_message", "")
 
     # TwiML minimale senza dipendenze

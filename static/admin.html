@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Admin · B&B WhatsApp Concierge</title>
+    <style>
+      :root {
+        --bg: #0b1220;
+        --panel: rgba(255, 255, 255, 0.06);
+        --panel2: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.7);
+        --accent: #8bd3dd;
+        --danger: #ff6b6b;
+        --ok: #7bd88f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+        background: radial-gradient(1200px 900px at 20% 10%, rgba(139, 211, 221, 0.20), transparent 60%),
+          radial-gradient(1000px 700px at 80% 0%, rgba(123, 216, 143, 0.18), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        padding: 28px 14px;
+      }
+      .wrap { width: min(980px, 100%); }
+      header { display: flex; gap: 14px; align-items: baseline; justify-content: space-between; }
+      h1 { font-size: 18px; margin: 0; }
+      .sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+      a { color: var(--accent); text-decoration: none; }
+
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+      @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+      .card {
+        background: var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        border-radius: 16px;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+        padding: 14px;
+      }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input, button {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        padding: 10px 12px;
+        outline: none;
+      }
+      input:focus { border-color: rgba(139, 211, 221, 0.55); }
+      button {
+        background: linear-gradient(135deg, rgba(139, 211, 221, 0.95), rgba(123, 216, 143, 0.85));
+        border: none;
+        color: #05202a;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .row { display: grid; grid-template-columns: 1fr 180px; gap: 10px; align-items: end; }
+      .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .pill {
+        display: inline-flex; gap: 8px; align-items: center;
+        border-radius: 999px; padding: 7px 10px;
+        background: var(--panel2);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        font-size: 12px; color: var(--muted);
+      }
+      .status { font-size: 13px; margin-top: 10px; color: var(--muted); }
+      .ok { color: var(--ok); }
+      .bad { color: var(--danger); }
+      pre {
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        border-radius: 12px;
+        overflow: auto;
+        color: rgba(255,255,255,0.86);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+      .list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+      .item {
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(0, 0, 0, 0.20);
+      }
+      .item b { display: block; font-size: 12px; }
+      .item small { color: var(--muted); }
+      .item p { margin: 8px 0 0; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>Admin</h1>
+          <p class="sub">
+            Gestione KB (Excel), status e handoff. Torna alla <a href="/">chat</a>.
+          </p>
+        </div>
+        <div class="pill"><span>X-Admin-Key</span><span>·</span><span>KB Upload</span></div>
+      </header>
+
+      <div class="grid">
+        <section class="card">
+          <h2 style="margin: 0 0 10px; font-size: 14px">Credenziali</h2>
+          <div class="row">
+            <div>
+              <label>Admin key</label>
+              <input id="key" type="password" placeholder="ADMIN_API_KEY" />
+            </div>
+            <button id="saveKey">Salva</button>
+          </div>
+          <div class="status" id="keyStatus"></div>
+        </section>
+
+        <section class="card">
+          <h2 style="margin: 0 0 10px; font-size: 14px">Knowledge Base</h2>
+          <div class="row">
+            <div>
+              <label>Carica Excel (.xlsx)</label>
+              <input id="kbFile" type="file" accept=".xlsx,.xlsm" />
+            </div>
+            <button id="uploadKb">Upload</button>
+          </div>
+          <div class="status" id="uploadStatus"></div>
+          <pre id="statusBox">Premi “Aggiorna status”.</pre>
+          <div style="margin-top: 10px" class="row2">
+            <button id="refreshStatus">Aggiorna status</button>
+            <button id="refreshHandoffs">Aggiorna handoff</button>
+          </div>
+        </section>
+
+        <section class="card" style="grid-column: 1 / -1">
+          <h2 style="margin: 0 0 10px; font-size: 14px">Handoff a Niccolò</h2>
+          <div class="status" id="handoffStatus"></div>
+          <div class="list" id="handoffList"></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function getKey() {
+        return localStorage.getItem("admin_key") || "";
+      }
+      function setKey(k) {
+        localStorage.setItem("admin_key", k);
+      }
+      function setStatus(el, ok, msg) {
+        el.textContent = msg;
+        el.className = "status " + (ok ? "ok" : "bad");
+      }
+
+      async function callJson(path) {
+        const key = getKey();
+        const r = await fetch(path, { headers: { "X-Admin-Key": key } });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || "Errore richiesta");
+        return data;
+      }
+
+      $("saveKey").addEventListener("click", () => {
+        const k = $("key").value.trim();
+        setKey(k);
+        setStatus($("keyStatus"), !!k, k ? "Salvata in questo browser." : "Inserisci una key valida.");
+      });
+
+      (function init() {
+        const k = getKey();
+        if (k) {
+          $("key").value = k;
+          setStatus($("keyStatus"), true, "Key presente in questo browser.");
+        } else {
+          setStatus($("keyStatus"), false, "Inserisci ADMIN_API_KEY (Render env var).");
+        }
+      })();
+
+      $("refreshStatus").addEventListener("click", async () => {
+        try {
+          const data = await callJson("/admin/status");
+          $("statusBox").textContent = JSON.stringify(data, null, 2);
+          setStatus($("uploadStatus"), true, "Status aggiornato.");
+        } catch (e) {
+          setStatus($("uploadStatus"), false, e.message || "Errore status");
+        }
+      });
+
+      $("uploadKb").addEventListener("click", async () => {
+        const file = $("kbFile").files[0];
+        if (!file) return setStatus($("uploadStatus"), false, "Seleziona un file .xlsx");
+        const key = getKey();
+        if (!key) return setStatus($("uploadStatus"), false, "Manca Admin key.");
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        $("uploadKb").disabled = true;
+        try {
+          const r = await fetch("/admin/kb/upload", {
+            method: "POST",
+            headers: { "X-Admin-Key": key },
+            body: fd,
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data.detail || "Upload fallito");
+          setStatus($("uploadStatus"), true, "KB caricata. Ora prova la chat.");
+          $("statusBox").textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          setStatus($("uploadStatus"), false, e.message || "Upload fallito");
+        } finally {
+          $("uploadKb").disabled = false;
+        }
+      });
+
+      $("refreshHandoffs").addEventListener("click", async () => {
+        const list = $("handoffList");
+        list.innerHTML = "";
+        try {
+          const data = await callJson("/admin/handoffs?limit=50");
+          const items = data.items || [];
+          setStatus($("handoffStatus"), true, `Trovati ${items.length} handoff.`);
+          for (const it of items) {
+            const div = document.createElement("div");
+            div.className = "item";
+            div.innerHTML = `
+              <b>#${it.id} · ${it.phone_e164} · ${it.reason}</b>
+              <small>${it.created_at} · booking=${it.booking_id || "-"} · property=${it.property_id || "-"}</small>
+              <p>${it.user_message || ""}</p>
+            `;
+            list.appendChild(div);
+          }
+        } catch (e) {
+          setStatus($("handoffStatus"), false, e.message || "Errore handoff");
+        }
+      });
+    </script>
+  </body>
+</html>
+

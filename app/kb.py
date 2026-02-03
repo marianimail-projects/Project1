@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-import numpy as np
 from openpyxl import load_workbook
 from sqlalchemy import select
 
@@ -72,14 +72,13 @@ class KBStore:
         if not entries:
             return []
 
-        query_emb = embed_texts([query])[0]
-        query_vec = np.array(query_emb, dtype=np.float32)
+        query_vec = embed_texts([query])[0]
 
         candidates: list[tuple[float, KBEntry]] = []
         for entry in entries:
             if not self._matches_property(entry.unit, property_hint):
                 continue
-            emb = np.array(json.loads(entry.embedding_json), dtype=np.float32)
+            emb = json.loads(entry.embedding_json)
             score = _cosine_similarity(query_vec, emb)
             candidates.append((float(score), entry))
 
@@ -226,8 +225,17 @@ def _hash_row(row: dict[str, str | None]) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    denom = (np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0:
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b:
         return 0.0
-    return float(np.dot(a, b) / denom)
+    dot = 0.0
+    norm_a = 0.0
+    norm_b = 0.0
+    for x, y in zip(a, b):
+        dot += float(x) * float(y)
+        norm_a += float(x) * float(x)
+        norm_b += float(y) * float(y)
+    denom = math.sqrt(norm_a) * math.sqrt(norm_b)
+    if denom == 0.0:
+        return 0.0
+    return dot / denom

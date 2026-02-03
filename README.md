@@ -18,6 +18,8 @@ export ADMIN_API_KEY="una-chiave-a-scelta"
 export MOCK_CIAO_BOOKING="true"
 ```
 
+In alternativa puoi copiare `/.env.example` → `/.env` e compilare i valori (il file `.env` è ignorato da git).
+
 3) (Opzionale) Metti il file Excel della KB in `data/kb.xlsx` (puoi anche caricarlo via UI admin).
 
 4) Avvia:
@@ -55,4 +57,3 @@ Per testare senza API reali:
 - UI chat: `GET /`
 - Chat API: `POST /api/chat`
 - Upload KB (admin): `POST /admin/kb/upload` (Header `X-Admin-Key: ...`)
-
