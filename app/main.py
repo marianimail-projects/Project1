@@ -10,9 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.db import Base, engine
+from app.db import Base, engine, SessionLocal
 from app.kb import KBStore
-from app.db import SessionLocal
 from app.models import ChatSession, HandoffRequest, KBEntry
 from app.service import ChatService
 
@@ -76,7 +75,19 @@ async def admin_kb_upload(
     target = Path(settings.kb_excel_path)
     target.write_bytes(await file.read())
     kb_store.load_from_excel(str(target))
-    return JSONResponse(content={"ok": True, "kb_path": str(target)})
+    with SessionLocal() as db:
+        kb_count = db.scalar(select(func.count()).select_from(KBEntry)) or 0
+    return JSONResponse(content={"ok": True, "kb_path": str(target), "kb_entries": int(kb_count)})
+
+
+@app.get("/admin/kb/inspect")
+def admin_kb_inspect(
+    x_admin_key: str | None = Header(default=None, alias="X-Admin-Key"),
+) -> JSONResponse:
+    if not settings.admin_api_key or x_admin_key != settings.admin_api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    info = kb_store.inspect_excel(settings.kb_excel_path)
+    return JSONResponse(content=info)
 
 
 @app.get("/admin/status")

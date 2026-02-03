@@ -46,7 +46,8 @@ class KBStore:
 
         kb_sheet = wb[sheet_names[0]]
         headers = self._read_headers(kb_sheet)
-        rows = list(self._iter_kb_rows(kb_sheet, headers=headers))
+        idx, _debug = self._build_header_index(headers)
+        rows = list(self._iter_kb_rows(kb_sheet, idx=idx))
 
         # Second sheet: anagrafica (opzionale)
         if len(sheet_names) >= 2:
@@ -55,6 +56,32 @@ class KBStore:
 
         if rows:
             self._sync_rows(rows)
+
+    def inspect_excel(self, excel_path: str) -> dict:
+        path = Path(excel_path)
+        if not path.exists():
+            return {"ok": False, "error": "File not found"}
+
+        wb = load_workbook(filename=str(path), data_only=True)
+        sheet_names = wb.sheetnames
+        if not sheet_names:
+            return {"ok": False, "error": "No sheets found"}
+
+        kb_sheet = wb[sheet_names[0]]
+        headers = self._read_headers(kb_sheet)
+        idx, debug = self._build_header_index(headers)
+        rows = list(self._iter_kb_rows(kb_sheet, idx=idx))
+        sample = rows[:3]
+
+        return {
+            "ok": True,
+            "sheet_names": sheet_names,
+            "headers": headers,
+            "header_map": debug,
+            "row_count_valid": len(rows),
+            "row_count_total": kb_sheet.max_row - 1 if kb_sheet.max_row else 0,
+            "sample_rows": sample,
+        }
 
     def retrieve(
         self,
@@ -141,27 +168,12 @@ class KBStore:
         return headers
 
     @staticmethod
-    def _iter_kb_rows(sheet, *, headers: list[str]) -> Iterable[dict[str, str | None]]:
-        wanted = {"Categoria", "Appartamento /stanza", "ambito", "descrizione", "risposta"}
-        idx = {h: i for i, h in enumerate(headers)}
-        if not wanted.issubset(idx.keys()):
-            # If headers don't match exactly, still try by position.
-            # Expected order: Categoria | Appartamento /stanza | ambito | descrizione | risposta
-            idx = {
-                "Categoria": 0,
-                "Appartamento /stanza": 1,
-                "ambito": 2,
-                "descrizione": 3,
-                "risposta": 4,
-            }
-
+    def _iter_kb_rows(sheet, *, idx: dict[str, int]) -> Iterable[dict[str, str | None]]:
         for row in sheet.iter_rows(min_row=2, values_only=True):
             if not any(v is not None and str(v).strip() for v in row):
                 continue
             out: dict[str, str | None] = {}
             for key, i in idx.items():
-                if key not in wanted:
-                    continue
                 val = row[i] if i < len(row) else None
                 sval = str(val).strip() if val is not None else None
                 out[key] = sval if sval else None
@@ -209,6 +221,66 @@ class KBStore:
             return False
         hint = property_hint.strip().lower()
         return unit_norm == hint
+
+    @staticmethod
+    def _normalize_header(value: str) -> str:
+        return (
+            value.strip()
+            .lower()
+            .replace(" ", "")
+            .replace("/", "")
+            .replace("\\", "")
+            .replace("-", "")
+            .replace("_", "")
+        )
+
+    def _build_header_index(self, headers: list[str]) -> tuple[dict[str, int], dict[str, str]]:
+        """
+        Map flexible header names to canonical keys.
+        Returns (idx, debug_map) where debug_map is canonical->original header.
+        """
+        canonical = {
+            "categoria": "Categoria",
+            "category": "Categoria",
+            "appartamentostanza": "Appartamento /stanza",
+            "appartamentostanze": "Appartamento /stanza",
+            "appartamento": "Appartamento /stanza",
+            "stanza": "Appartamento /stanza",
+            "camera": "Appartamento /stanza",
+            "struttura": "Appartamento /stanza",
+            "property": "Appartamento /stanza",
+            "ambito": "ambito",
+            "scope": "ambito",
+            "descrizione": "descrizione",
+            "description": "descrizione",
+            "risposta": "risposta",
+            "answer": "risposta",
+            "response": "risposta",
+        }
+
+        idx: dict[str, int] = {}
+        debug: dict[str, str] = {}
+        for i, h in enumerate(headers):
+            norm = self._normalize_header(h)
+            if norm in canonical:
+                key = canonical[norm]
+                if key not in idx:
+                    idx[key] = i
+                    debug[key] = h
+
+        # If still missing, fall back by position (expected order)
+        required = ["Categoria", "Appartamento /stanza", "ambito", "descrizione", "risposta"]
+        if not all(k in idx for k in required) and len(headers) >= 5:
+            idx = {
+                "Categoria": 0,
+                "Appartamento /stanza": 1,
+                "ambito": 2,
+                "descrizione": 3,
+                "risposta": 4,
+            }
+            debug = {k: headers[i] if i < len(headers) else "" for k, i in idx.items()}
+
+        return idx, debug
 
 
 def _row_to_embedding_text(row: dict[str, str | None]) -> str:
