@@ -1,0 +1,12 @@
+{
+  "bookings": [
+    {
+      "phone_e164": "+393331112233",
+      "booking_id": "BK-12345",
+      "property_id": "APT-ROSSO",
+      "guest_last_name": "Rossi",
+      "guest_language": "it"
+    }
+  ]
+}
+

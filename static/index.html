@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>B&B WhatsApp Concierge (Test)</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #0b1220;
+        --panel: rgba(255, 255, 255, 0.06);
+        --panel2: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.7);
+        --accent: #8bd3dd;
+        --danger: #ff6b6b;
+        --ok: #7bd88f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
+        background: radial-gradient(1200px 900px at 20% 10%, rgba(139, 211, 221, 0.20), transparent 60%),
+          radial-gradient(1000px 700px at 80% 0%, rgba(123, 216, 143, 0.18), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        justify-content: center;
+        padding: 28px 14px;
+      }
+      .wrap { width: min(980px, 100%); }
+      header {
+        display: flex;
+        gap: 18px;
+        align-items: baseline;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+      h1 { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
+      .sub { color: var(--muted); font-size: 13px; margin: 0; }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 14px;
+      }
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        border-radius: 16px;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      }
+      .left { padding: 14px; }
+      label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+      input, textarea, button {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        padding: 10px 12px;
+        outline: none;
+      }
+      input:focus, textarea:focus { border-color: rgba(139, 211, 221, 0.55); }
+      textarea { min-height: 110px; resize: vertical; }
+      button {
+        background: linear-gradient(135deg, rgba(139, 211, 221, 0.95), rgba(123, 216, 143, 0.85));
+        border: none;
+        color: #05202a;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .hint { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.4; }
+      .pill {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        border-radius: 999px;
+        padding: 7px 10px;
+        background: var(--panel2);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .chat { display: flex; flex-direction: column; height: 70vh; min-height: 520px; }
+      .chat .top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+      }
+      .chat .top b { font-size: 13px; }
+      .chat .top small { color: var(--muted); }
+      .msgs { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+      .msg {
+        width: fit-content;
+        max-width: 78%;
+        padding: 10px 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.10);
+        background: rgba(255, 255, 255, 0.06);
+        line-height: 1.35;
+        white-space: pre-wrap;
+      }
+      .msg.user { margin-left: auto; background: rgba(139, 211, 221, 0.14); }
+      .msg.assistant { margin-right: auto; background: rgba(123, 216, 143, 0.12); }
+      .meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+      .composer {
+        margin-top: auto;
+        padding: 12px 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.10);
+        display: grid;
+        grid-template-columns: 1fr 130px;
+        gap: 10px;
+      }
+      .composer input { height: 42px; }
+      .statusline {
+        padding: 10px 14px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .status-ok { color: var(--ok); }
+      .status-bad { color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>B&B WhatsApp Concierge (Test)</h1>
+          <p class="sub">Simula una chat WhatsApp: inserisci il numero e invia messaggi.</p>
+        </div>
+        <div class="pill">
+          <span>RAG da Excel</span>
+          <span>·</span>
+          <span>Sessione + memoria</span>
+        </div>
+      </header>
+
+      <div class="grid">
+        <section class="card left">
+          <div style="margin-bottom: 10px">
+            <label>Telefono (E.164)</label>
+            <input id="phone" placeholder="+393331112233" value="+393331112233" />
+          </div>
+          <div style="margin-bottom: 10px">
+            <label>Messaggio (per test)</label>
+            <textarea id="seed" placeholder="Es: A che ora è il check-in?"></textarea>
+          </div>
+          <button id="sendSeed">Invia nel chat</button>
+          <div class="hint">
+            Suggerimento: con <code>MOCK_CIAO_BOOKING=true</code> la prenotazione viene letta da
+            <code>data/mock_ciaobooking.json</code>.
+          </div>
+        </section>
+
+        <section class="card chat">
+          <div class="top">
+            <div>
+              <b>Conversazione</b>
+              <small id="who"></small>
+            </div>
+            <small id="net"></small>
+          </div>
+          <div id="msgs" class="msgs"></div>
+          <div class="composer">
+            <input id="msg" placeholder="Scrivi un messaggio..." />
+            <button id="send">Invia</button>
+          </div>
+          <div class="statusline">
+            <span id="status">Pronto.</span>
+            <span id="kb"></span>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const msgs = $("msgs");
+      const status = $("status");
+      const kb = $("kb");
+      const who = $("who");
+      const net = $("net");
+
+      function add(role, text) {
+        const wrap = document.createElement("div");
+        wrap.className = "msg " + role;
+        wrap.textContent = text;
+        msgs.appendChild(wrap);
+        msgs.scrollTop = msgs.scrollHeight;
+      }
+
+      async function sendMessage(text) {
+        const phone = $("phone").value.trim();
+        if (!phone) return;
+        who.textContent = "· " + phone;
+        add("user", text);
+        status.textContent = "Sto scrivendo…";
+        status.className = "";
+        kb.textContent = "";
+        $("send").disabled = true;
+        try {
+          const r = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone, message: text }),
+          });
+          net.textContent = r.ok ? "" : "Errore rete";
+          const data = await r.json();
+          add("assistant", data.assistant_message || "(nessuna risposta)");
+          status.textContent = data.status === "handoff" ? "Inoltrato a Niccolò" : "OK";
+          status.className = data.status === "handoff" ? "status-bad" : "status-ok";
+          if (typeof data.kb_best_score === "number") {
+            kb.textContent = "KB score: " + data.kb_best_score.toFixed(3);
+          }
+        } catch (e) {
+          net.textContent = "Errore";
+          add("assistant", "Errore tecnico durante l'invio.");
+          status.textContent = "Errore.";
+          status.className = "status-bad";
+        } finally {
+          $("send").disabled = false;
+        }
+      }
+
+      $("send").addEventListener("click", () => {
+        const text = $("msg").value.trim();
+        if (!text) return;
+        $("msg").value = "";
+        sendMessage(text);
+      });
+      $("msg").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          $("send").click();
+        }
+      });
+
+      $("sendSeed").addEventListener("click", () => {
+        const t = $("seed").value.trim();
+        if (!t) return;
+        $("seed").value = "";
+        sendMessage(t);
+      });
+    </script>
+  </body>
+</html>
+
